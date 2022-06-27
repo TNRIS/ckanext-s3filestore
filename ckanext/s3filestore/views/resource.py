@@ -51,7 +51,7 @@ def resource_download(package_type, id, resource_id, filename=None):
     except NotAuthorized:
         return abort(401, _('Unauthorized to read resource %s') % id)
 
-    if rsc.get('url_type') == 'upload':
+    if rsc.get('url_type') == 'upload' or rsc.get('url_type') == 'datapusher':
 
         upload = uploader.get_resource_uploader(rsc)
         preview = request.args.get(u'preview', False)
