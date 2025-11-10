@@ -6,6 +6,16 @@ import ckanext.s3filestore.uploader
 from ckanext.s3filestore.views import resource, uploads
 from ckanext.s3filestore.click_commands import upload_resources, upload_assets
 
+import logging
+from .uploader import BaseS3Uploader
+from ckanext.s3filestore.s3util import delete_prefix, join_s3, delete_matching_uuid
+from ckan.types import Context
+from typing import Any
+from ckan.common import config
+import os
+import ckan.model as model
+
+log = logging.getLogger(__name__)
 
 class S3FileStorePlugin(plugins.SingletonPlugin):
     plugins.implements(plugins.IConfigurer)
@@ -13,7 +23,8 @@ class S3FileStorePlugin(plugins.SingletonPlugin):
     plugins.implements(plugins.IUploader)
     plugins.implements(plugins.IBlueprint)
     plugins.implements(plugins.IClick)
-
+    plugins.implements(plugins.IResourceController, inherit=True)
+    plugins.implements(plugins.IOrganizationController, inherit=True)
     # IConfigurer
 
     def update_config(self, config_):
@@ -60,6 +71,48 @@ class S3FileStorePlugin(plugins.SingletonPlugin):
         '''Return an uploader object used to upload general files.'''
         return ckanext.s3filestore.uploader.S3Uploader(upload_to,
                                                        old_filename)
+
+    # IResourceController
+    # Resource deletion
+    def before_resource_delete(
+            self, context: Context, resource: dict[str, Any],
+            resources: list[dict[str, Any]]) -> None:
+        try:
+            s3 = BaseS3Uploader()
+            storage_path = config.get('ckanext.s3filestore.aws_storage_path', '')
+            storage_root = os.path.join(storage_path, 'resources') 
+            prefix = join_s3(storage_root, resource['id'])
+            delete_prefix(s3, prefix)
+            log.info(f"Purged {prefix}/* on resource delete")
+        except Exception as e:
+            log.warning(f"Resource purge failed: {e}")
+
+    # IOrganizationController
+    # Group deletion
+
+    def delete(self, entity: 'model.Group') -> None:
+        """
+        Called before commit inside group_delete.
+        """
+        try:
+            s3 = BaseS3Uploader()
+
+            storage_path = config.get('ckanext.s3filestore.aws_storage_path', '')
+
+            base_prefix = os.path.join(storage_path, "storage", "uploads", "group")
+            uuid_str = entity.name
+            if uuid_str: 
+                org_dict = toolkit.get_action('organization_show')({}, {'id': uuid_str})
+                uuid_val= org_dict['id']
+                log.info(f"Purging uploads for organization uuid={uuid_val} under {base_prefix}/")
+            
+            if uuid_val:
+                delete_matching_uuid(s3, base_prefix, uuid_val)
+
+        except Exception as e:
+            log.warning(
+                f"Group/org purge failed for {getattr(entity, 'id', '?')}: {e}"
+            )
 
     # IBlueprint
 

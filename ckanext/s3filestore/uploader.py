@@ -15,6 +15,13 @@ import ckantoolkit as toolkit
 import ckan.model as model
 import ckan.lib.munge as munge
 
+import tempfile
+from pathlib import Path
+from PIL import Image
+import io
+import uuid
+from ckanext.s3filestore.s3util import delete_prefix, join_s3, is_image, delete_matching_uuid
+
 if toolkit.check_ckan_version(min_version='2.7.0'):
     from werkzeug.datastructures import FileStorage as FlaskFileStorage
 
@@ -199,8 +206,8 @@ class S3Uploader(BaseS3Uploader):
 
         self.filename = None
         self.filepath = None
-
         self.old_filename = old_filename
+        self.old_filepath = None
         if old_filename:
             self.old_filepath = os.path.join(self.storage_path, old_filename)
 
@@ -222,7 +229,8 @@ class S3Uploader(BaseS3Uploader):
         `clear_field` is the name of a boolean field which requests the upload
         to be deleted.
         '''
-
+        log.info("DATA_DICT")
+        log.info(data_dict)
         self.url = data_dict.get(url_field, '')
         self.clear = data_dict.pop(clear_field, None)
         self.file_field = file_field
@@ -232,9 +240,25 @@ class S3Uploader(BaseS3Uploader):
             return
         if isinstance(self.upload_field_storage, ALLOWED_UPLOAD_TYPES) \
                 and self.upload_field_storage.filename:
-            self.filename = self.upload_field_storage.filename
-            self.filename = str(datetime.datetime.utcnow()) + self.filename
-            self.filename = munge.munge_filename_legacy(self.filename)
+            
+            orig_name = self.upload_field_storage.filename
+            ts = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+            id = (data_dict.get('id') or '').strip() 
+            uuid_val = id
+            if id: 
+                if (data_dict.get('type') or '') == 'organization':
+                    org_dict = toolkit.get_action('organization_show')({}, {'id': id})
+                    uuid_val= org_dict['id']
+                else:
+                    user_dict = toolkit.get_action('user_show')({'id': data_dict['id']})
+                    uuid_val= user_dict['id']
+            root, ext = os.path.splitext(orig_name)
+
+            new_name = f"{ts}-{uuid_val}{ext}" if uuid_val else f"{ts}-{orig_name}"
+
+            # self.filename = self.upload_field_storage.filename
+            # self.filename = str(datetime.datetime.utcnow()) + self.filename
+            self.filename = munge.munge_filename_legacy(new_name)
             self.filepath = os.path.join(self.storage_path, self.filename)
             self.mimetype = mimetypes.guess_type(self.filename, strict=False)[0]
             data_dict[url_field] = self.filename
@@ -245,6 +269,51 @@ class S3Uploader(BaseS3Uploader):
                 data_dict[url_field] = self.old_filename
             if self.clear and self.url == self.old_filename:
                 data_dict[url_field] = ''
+    
+    
+
+    def create_and_upload_thumbnail(self, key_for_original: str, file_bytes: bytes):
+        """
+        Create thumbnail on disk using the same logic as your helper
+        and upload it to S3 using upload_to_key().
+        """
+        if "." in key_for_original:
+            thumb_key = "{0}_{2}.{1}".format(
+                *key_for_original.rsplit(".", 1) + ["thumbnail"]
+            )
+        else:
+            thumb_key = key_for_original + "_thumbnail"
+
+        log.info(f"Creating + uploading thumbnail to {thumb_key}")
+
+        try:
+            image = Image.open(io.BytesIO(file_bytes))
+        except IOError:
+            log.warning("Could not open image for thumbnail creation")
+            return
+
+        width = int(toolkit.config.get("ckan.thumbnail_width", 200))
+        height = int(toolkit.config.get("ckan.thumbnail_height", 200))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            thumb_path = Path(tmpdir) / Path(thumb_key).name  # just use filename
+            image.thumbnail((width, height))
+            image.save(thumb_path)
+
+            with open(thumb_path, "rb") as f:
+                old_ct = self.mimetype
+                self.mimetype = mimetypes.guess_type(thumb_path.name, strict=False)[0] or old_ct or "image/png"
+                self.upload_to_key(thumb_key, f)
+                self.mimetype = old_ct
+
+        log.info(f"Thumbnail uploaded successfully to {thumb_key}")
+
+    def is_valid_uuid(self, uuid_string):
+        try:
+            uuid.UUID(uuid_string)
+            return True
+        except ValueError:
+            return False
 
     def upload(self, max_size=2):
         '''Actually upload the file.
@@ -257,8 +326,29 @@ class S3Uploader(BaseS3Uploader):
         # If a filename has been provided (a file is being uploaded) write the
         # file to the appropriate key in the AWS bucket.
         if self.filename:
+            try:
+                # derive uuid back out of '{ts}-{uuid}.{ext}' best-effort
+                uuid_part = None
+                if '-' in self.filename:
+                    _, tail = self.filename.split('-', 1)
+                    uuid_part = os.path.splitext(tail)[0]  
+
+                if uuid_part and self.is_valid_uuid(uuid_part):
+                    base_prefix = self.storage_path  
+                    delete_matching_uuid(self, base_prefix, uuid_part)
+                    log.info(f"Deleted old images for uuid={uuid_part} under {base_prefix}/")
+            except Exception as e:
+                log.warning(f"Could not purge old images: {e}")
+
             self.upload_to_key(self.filepath, self.upload_file)
             self.clear = True
+
+            try:
+                self.upload_file.seek(0)
+                data = self.upload_file.read()
+                self.create_and_upload_thumbnail(self.filepath, data)
+            except Exception as e:
+                log.warning(f"Thumbnail generation failed: {e}")
 
         if (self.clear and self.old_filename
                 and not self.old_filename.startswith('http')):
@@ -366,14 +456,67 @@ class S3ResourceUploader(BaseS3Uploader):
         filepath = os.path.join(directory, filename)
         return filepath
 
+    def create_and_upload_thumbnail(self, key_for_original: str, file_bytes: bytes):
+        """
+        Create thumbnail on disk using the same logic as your helper
+        and upload it to S3 using upload_to_key().
+        """
+        if "." in key_for_original:
+            thumb_key = "{0}_{2}.{1}".format(
+                *key_for_original.rsplit(".", 1) + ["thumbnail"]
+            )
+        else:
+            thumb_key = key_for_original + "_thumbnail"
+
+        log.info(f"Creating + uploading thumbnail to {thumb_key}")
+
+        try:
+            image = Image.open(io.BytesIO(file_bytes))
+        except IOError:
+            log.warning("Could not open image for thumbnail creation")
+            return
+
+        width = int(toolkit.config.get("ckan.thumbnail_width", 200))
+        height = int(toolkit.config.get("ckan.thumbnail_height", 200))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            thumb_path = Path(tmpdir) / Path(thumb_key).name  # just use filename
+            image.thumbnail((width, height))
+            image.save(thumb_path)
+
+            with open(thumb_path, "rb") as f:
+                old_ct = self.mimetype
+                self.mimetype = mimetypes.guess_type(thumb_path.name, strict=False)[0] or old_ct or "image/png"
+                self.upload_to_key(thumb_key, f)
+                self.mimetype = old_ct
+
+        log.info(f"Thumbnail uploaded successfully to {thumb_key}")
+
     def upload(self, id, max_size=10):
         '''Upload the file to S3.'''
+
+        res_prefix = join_s3(self.storage_path, id)  # '<storage>/resources/<id>'
+        try:
+            delete_prefix(self, res_prefix)
+            log.info(f"Purged {res_prefix}/ before new resource upload")
+        except Exception as e:
+            log.warning(f"Could not purge {res_prefix}/: {e}")
 
         # If a filename has been provided (a file is being uploaded) write the
         # file to the appropriate key in the AWS bucket.
         if self.filename:
             filepath = self.get_path(id, self.filename)
             self.upload_to_key(filepath, self.upload_file)
+
+            if is_image(self.mimetype):
+                try:
+                    self.upload_file.seek(0)
+                    data = self.upload_file.read()
+                    thumb_key = self.get_path(id, self.filename)
+                    log.warning(f"Resource thumbnail : {thumb_key}")
+                    self.create_and_upload_thumbnail(thumb_key, data)
+                except Exception as e:
+                    log.warning(f"Resource thumbnail failed: {e}")
 
         # The resource form only sets self.clear (via the input clear_upload)
         # to True when an uploaded file is not replaced by another uploaded
