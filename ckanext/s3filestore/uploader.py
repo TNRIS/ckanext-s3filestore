@@ -495,6 +495,10 @@ class S3ResourceUploader(BaseS3Uploader):
     def upload(self, id, max_size=10):
         '''Upload the file to S3.'''
 
+        # It'll skip the other resources under same dataset
+        if not self.filename:
+            return
+        
         res_prefix = join_s3(self.storage_path, id)  # '<storage>/resources/<id>'
         try:
             delete_prefix(self, res_prefix)
