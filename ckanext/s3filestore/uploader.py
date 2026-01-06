@@ -229,8 +229,6 @@ class S3Uploader(BaseS3Uploader):
         `clear_field` is the name of a boolean field which requests the upload
         to be deleted.
         '''
-        log.info("DATA_DICT")
-        log.info(data_dict)
         self.url = data_dict.get(url_field, '')
         self.clear = data_dict.pop(clear_field, None)
         self.file_field = file_field
@@ -250,7 +248,7 @@ class S3Uploader(BaseS3Uploader):
                     org_dict = toolkit.get_action('organization_show')({}, {'id': id})
                     uuid_val= org_dict['id']
                 else:
-                    user_dict = toolkit.get_action('user_show')({'id': data_dict['id']})
+                    user_dict = toolkit.get_action('user_show')({'user': data_dict['id']}, {'id': data_dict['id']})
                     uuid_val= user_dict['id']
             root, ext = os.path.splitext(orig_name)
 
