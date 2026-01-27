@@ -115,8 +115,6 @@ class BaseS3Uploader(object):
                                          CreateBucketConfiguration={
                                              'LocationConstraint': self.region
                                          })
-                    log.info(
-                        'Bucket {0} successfully created'.format(bucket_name))
                 except botocore.exceptions.ClientError as e:
                     log.warning('Could not create bucket {0}: {1}'.format(
                         bucket_name, str(e)))
@@ -141,7 +139,6 @@ class BaseS3Uploader(object):
                 Body=upload_file.read(),
                 ACL='public-read' if make_public else self.acl,
                 ContentType=getattr(self, 'mimetype', '') or 'text/plain')
-            log.info("Successfully uploaded {0} to S3!".format(filepath))
         except Exception as e:
             log.error('Something went very very wrong for {0}'.format(str(e)))
             raise e
@@ -282,7 +279,6 @@ class S3Uploader(BaseS3Uploader):
         else:
             thumb_key = key_for_original + "_thumbnail"
 
-        log.info(f"Creating + uploading thumbnail to {thumb_key}")
 
         try:
             image = Image.open(io.BytesIO(file_bytes))
@@ -304,7 +300,6 @@ class S3Uploader(BaseS3Uploader):
                 self.upload_to_key(thumb_key, f)
                 self.mimetype = old_ct
 
-        log.info(f"Thumbnail uploaded successfully to {thumb_key}")
 
     def is_valid_uuid(self, uuid_string):
         try:
@@ -334,7 +329,6 @@ class S3Uploader(BaseS3Uploader):
                 if uuid_part and self.is_valid_uuid(uuid_part):
                     base_prefix = self.storage_path  
                     delete_matching_uuid(self, base_prefix, uuid_part)
-                    log.info(f"Deleted old images for uuid={uuid_part} under {base_prefix}/")
             except Exception as e:
                 log.warning(f"Could not purge old images: {e}")
 
@@ -466,7 +460,6 @@ class S3ResourceUploader(BaseS3Uploader):
         else:
             thumb_key = key_for_original + "_thumbnail"
 
-        log.info(f"Creating + uploading thumbnail to {thumb_key}")
 
         try:
             image = Image.open(io.BytesIO(file_bytes))
@@ -488,7 +481,6 @@ class S3ResourceUploader(BaseS3Uploader):
                 self.upload_to_key(thumb_key, f)
                 self.mimetype = old_ct
 
-        log.info(f"Thumbnail uploaded successfully to {thumb_key}")
 
     def upload(self, id, max_size=10):
         '''Upload the file to S3.'''
@@ -500,7 +492,6 @@ class S3ResourceUploader(BaseS3Uploader):
         res_prefix = join_s3(self.storage_path, id)  # '<storage>/resources/<id>'
         try:
             delete_prefix(self, res_prefix)
-            log.info(f"Purged {res_prefix}/ before new resource upload")
         except Exception as e:
             log.warning(f"Could not purge {res_prefix}/: {e}")
 
