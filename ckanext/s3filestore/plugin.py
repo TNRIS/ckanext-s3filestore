@@ -83,7 +83,6 @@ class S3FileStorePlugin(plugins.SingletonPlugin):
             storage_root = os.path.join(storage_path, 'resources') 
             prefix = join_s3(storage_root, resource['id'])
             delete_prefix(s3, prefix)
-            log.info(f"Purged {prefix}/* on resource delete")
         except Exception as e:
             log.warning(f"Resource purge failed: {e}")
 
@@ -104,7 +103,6 @@ class S3FileStorePlugin(plugins.SingletonPlugin):
             if uuid_str: 
                 org_dict = toolkit.get_action('organization_show')({}, {'id': uuid_str})
                 uuid_val= org_dict['id']
-                log.info(f"Purging uploads for organization uuid={uuid_val} under {base_prefix}/")
             
             if uuid_val:
                 delete_matching_uuid(s3, base_prefix, uuid_val)
