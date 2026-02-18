@@ -265,8 +265,10 @@ class S3Uploader(BaseS3Uploader):
             if self.clear and self.url == self.old_filename:
                 data_dict[url_field] = ''
     
+    def is_svg(self, key_for_original: str, file_bytes: bytes) -> bool:
+        if key_for_original.lower().endswith(".svg"):
+            return True
     
-
     def create_and_upload_thumbnail(self, key_for_original: str, file_bytes: bytes):
         """
         Create thumbnail on disk using the same logic as your helper
@@ -280,6 +282,15 @@ class S3Uploader(BaseS3Uploader):
             thumb_key = key_for_original + "_thumbnail"
 
 
+        if self.is_svg(key_for_original, file_bytes):
+            old_ct = self.mimetype
+            try:
+                self.mimetype = "image/svg+xml"
+                self.upload_to_key(thumb_key, io.BytesIO(file_bytes))
+            finally:
+                self.mimetype = old_ct
+            return
+        
         try:
             image = Image.open(io.BytesIO(file_bytes))
         except IOError:
@@ -447,6 +458,10 @@ class S3ResourceUploader(BaseS3Uploader):
         directory = self.get_directory(id, self.storage_path)
         filepath = os.path.join(directory, filename)
         return filepath
+    
+    def is_svg(self, key_for_original: str, file_bytes: bytes) -> bool:
+        if key_for_original.lower().endswith(".svg"):
+            return True
 
     def create_and_upload_thumbnail(self, key_for_original: str, file_bytes: bytes):
         """
@@ -461,6 +476,15 @@ class S3ResourceUploader(BaseS3Uploader):
             thumb_key = key_for_original + "_thumbnail"
 
 
+        if self.is_svg(key_for_original, file_bytes):
+            old_ct = self.mimetype
+            try:
+                self.mimetype = "image/svg+xml"
+                self.upload_to_key(thumb_key, io.BytesIO(file_bytes))
+            finally:
+                self.mimetype = old_ct
+            return
+    
         try:
             image = Image.open(io.BytesIO(file_bytes))
         except IOError:
